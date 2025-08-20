@@ -1,0 +1,50 @@
+Target Field Name,Null Allowed,Target Data Type,Description
+Id,No,string,Unique identifier for the record
+OwnerId,Yes,string,Record owner ID
+KPMGOwnerID,Yes,string,KPMG owner identifier
+IsDeleted,No,boolean,Soft delete flag
+Name,Yes,string,Record name
+CurrencyIsoCode,Yes,string,Currency code
+CreatedDate,Yes,timestamp,Record creation date
+CreatedById,Yes,string,User who created the record
+KPMGCreatedById,Yes,string,KPMG user who created the record
+LastModifiedDate,Yes,timestamp,Last modification date
+LastModifiedById,Yes,string,User who last modified the record
+KPMGModifiedById,Yes,string,KPMG user who last modified the record
+SystemModstamp,Yes,timestamp,System modification timestamp
+ffscpq__End_Date__c,Yes,timestamp,End date field
+ffscpq__Estimate_Product__c,Yes,string,Estimate product
+KPMGEngageProductId,Yes,string,KPMG engage product ID
+ffscpq__Estimate__c,Yes,string,Estimate reference
+ffscpq__Group__c,Yes,string,Group field
+ffscpq__Hours__c,Yes,DECIMAL(18,2),Hours with 2 decimal places
+ffscpq__Practice__c,Yes,string,Practice field
+KPMGEngagePracticeId,Yes,string,KPMG engage practice ID
+ffscpq__Region__c,Yes,string,Region field
+ffscpq__Resource_Role__c,Yes,string,Resource role
+ffscpq__Start_Date__c,Yes,timestamp,Start date field
+ffscpq__Actual_Cost_Rate__c,Yes,DECIMAL(18,4),Actual cost rate with 4 decimal places
+KPMG_OffshoreCategory__c,Yes,string,Offshore category
+KPMG_LocationType__c,Yes,string,Location type
+KPMG_AuditSeniorHours__c,Yes,DECIMAL(18,2),Audit senior hours
+KPMG_AuditPreparerHours__c,Yes,DECIMAL(18,2),Audit preparer hours
+KPMG_AuditSupervisorHours__c,Yes,DECIMAL(18,2),Audit supervisor hours
+KPMG_AuditGDCHours__c,Yes,DECIMAL(18,2),Audit GDC hours
+KPMG_OffshoreHours__c,Yes,DECIMAL(18,2),Offshore hours
+KPMG_NearshoreCenterHours__c,Yes,DECIMAL(18,2),Nearshore center hours
+KPMG_StaffHours__c,Yes,DECIMAL(18,2),Staff hours
+KPMG_AuditTAHours__c,Yes,DECIMAL(18,2),Audit TA hours
+KPMG_AuditCASHours__c,Yes,DECIMAL(18,2),Audit CAS hours
+KPMG_AdvisoryHours__c,Yes,DECIMAL(18,2),Advisory hours
+KPMG_AuditHours__c,Yes,DECIMAL(18,2),Audit hours
+KPMG_TaxHours__c,Yes,DECIMAL(18,2),Tax hours
+ffscpq__Requested_Bill_Rate__c,Yes,DECIMAL(18,4),Requested bill rate
+ffscpq__Percent_Discount__c,Yes,DECIMAL(18,2),Percent discount
+KPMG_ServiceGroupLookup__c,Yes,STRING,Service group lookup
+KPMG_OtherHours__c,Yes,DECIMAL(18,2),Other hours
+KPMG_CostCenterLookup__c,Yes,STRING,Cost center lookup
+KPMG_OnshoreHours__c,Yes,DECIMAL(18,2),Onshore hours
+KPMG_ERR_External_Id__c,Yes,STRING,External ID
+KPMG_ServiceNetworkLookup__c,Yes,STRING,Service network lookup
+KPMG_ServiceLineLookup__c,Yes,STRING,Service line lookup
+KPMG_LocationTypePicklist__c,Yes,STRING,Location type picklist
