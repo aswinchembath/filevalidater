@@ -20,29 +20,41 @@ class CSVValidator {
       fs.createReadStream(mappingFilePath)
         .pipe(csv())
         .on('data', (row) => {
-          // Handle different column name formats
-          const fieldName = row.fieldName || row['Field Name'] || row['Target Field Name'] || row['TargetFieldName'];
-          const dataType = row.dataType || row['Data Type'] || row['Target Data Type'] || row['TargetDataType'];
-          const required = this.parseBoolean(row.required || row['Required'] || row['Null Allowed'] || row['NullAllowed']);
-          const minLength = this.parseNumber(row.minLength || row['Min Length'] || row['MinLength']);
-          const maxLength = this.parseNumber(row.maxLength || row['Max Length'] || row['MaxLength']);
-          const pattern = row.pattern || row['Pattern'];
-          const allowedValues = row.allowedValues || row['Allowed Values'] || row['AllowedValues'];
-          const description = row.description || row['Description'];
+          // Handle different column name formats with priority order
+          const fieldName = row['Target Field Name'] || row['TargetFieldName'] || row['Field Name'] || row['fieldName'];
+          const dataType = row['Target Data Type'] || row['TargetDataType'] || row['Data Type'] || row['dataType'] || row['may come '] || row['may come'];
+          const nullAllowed = row['Null Allowed'] || row['NullAllowed'] || row['Required'] || row['required'];
+          const description = row['Description'] || row['description'];
+          
+          // Additional optional fields
+          const minLength = this.parseNumber(row['Min Length'] || row['MinLength'] || row['minLength']);
+          const maxLength = this.parseNumber(row['Max Length'] || row['MaxLength'] || row['maxLength']);
+          const pattern = row['Pattern'] || row['pattern'];
+          const allowedValues = row['Allowed Values'] || row['AllowedValues'] || row['allowedValues'];
 
-          // Normalize data type to handle mixed case
+          // Skip rows without essential information
+          if (!fieldName || !dataType) {
+            console.warn(`Skipping row with missing field name or data type: ${JSON.stringify(row)}`);
+            return;
+          }
+
+          // Parse null allowed field - handle various formats
+          const isNullAllowed = this.parseNullAllowed(nullAllowed);
+          
+          // Normalize data type to handle mixed case and various formats
           const normalizedDataType = this.normalizeDataType(dataType);
 
           rules.push({
-            fieldName,
+            fieldName: fieldName.trim(),
             dataType: normalizedDataType,
-            originalDataType: dataType, // Keep original for display
-            required: !required, // Invert since "Null Allowed" means not required
+            originalDataType: dataType.trim(), // Keep original for display
+            required: !isNullAllowed, // Invert since "Null Allowed" means not required
+            nullAllowed: isNullAllowed, // Store the original null allowed value
             minLength,
             maxLength,
             pattern,
             allowedValues,
-            description
+            description: description ? description.trim() : ''
           });
         })
         .on('end', () => {
@@ -57,7 +69,33 @@ class CSVValidator {
   }
 
   /**
-   * Normalize data type to handle mixed case formats
+   * Parse null allowed field with smart handling of various formats
+   * @param {string} value - The null allowed value
+   */
+  parseNullAllowed(value) {
+    if (value === undefined || value === null || value === '') {
+      return false; // Default to not allowing null if not specified
+    }
+    
+    const lowerValue = value.toString().toLowerCase().trim();
+    
+    // Handle various "Yes" formats
+    if (lowerValue === 'yes' || lowerValue === 'y' || lowerValue === 'true' || lowerValue === '1' || lowerValue === 'allow' || lowerValue === 'allowed') {
+      return true;
+    }
+    
+    // Handle various "No" formats
+    if (lowerValue === 'no' || lowerValue === 'n' || lowerValue === 'false' || lowerValue === '0' || lowerValue === 'deny' || lowerValue === 'denied' || lowerValue === 'required') {
+      return false;
+    }
+    
+    // Default to false for unrecognized values
+    console.warn(`Unrecognized 'Null Allowed' value: '${value}'. Defaulting to false (not allowed).`);
+    return false;
+  }
+
+  /**
+   * Normalize data type to handle mixed case formats and various Salesforce data types
    * @param {string} dataType - The data type string
    */
   normalizeDataType(dataType) {
@@ -65,21 +103,27 @@ class CSVValidator {
     
     const normalized = dataType.toString().toLowerCase().trim();
     
-    // Handle Salesforce-specific data types
-    if (normalized.includes('decimal') || normalized.includes('number')) {
+    // Handle Salesforce-specific data types with better pattern matching
+    if (normalized.includes('decimal') || normalized.includes('number') || normalized.includes('double') || normalized.includes('float')) {
       return 'decimal';
     }
-    if (normalized.includes('boolean')) {
+    if (normalized.includes('boolean') || normalized.includes('bool')) {
       return 'boolean';
     }
-    if (normalized.includes('timestamp') || normalized.includes('datetime') || normalized.includes('date')) {
+    if (normalized.includes('timestamp') || normalized.includes('datetime') || normalized.includes('date') || normalized.includes('time')) {
       return 'date';
     }
-    if (normalized.includes('string') || normalized.includes('text') || normalized.includes('picklist')) {
+    if (normalized.includes('string') || normalized.includes('text') || normalized.includes('picklist') || normalized.includes('multipicklist') || normalized.includes('textarea')) {
       return 'string';
     }
-    if (normalized.includes('integer') || normalized.includes('int')) {
+    if (normalized.includes('integer') || normalized.includes('int') || normalized.includes('long')) {
       return 'integer';
+    }
+    if (normalized.includes('email') || normalized.includes('url') || normalized.includes('phone')) {
+      return 'string'; // These are specialized string types
+    }
+    if (normalized.includes('currency') || normalized.includes('percent')) {
+      return 'decimal'; // These are specialized decimal types
     }
     
     return 'string'; // Default fallback
@@ -143,13 +187,13 @@ class CSVValidator {
     const result = { errors: [], warnings: [] };
 
     // Check if required field is present
-    if (rule.required && (value === undefined || value === null || value === '')) {
-      result.errors.push(`Field '${fieldName}' is required but missing`);
+    if (rule.required && this.isEmptyValue(value)) {
+      result.errors.push(`Field '${fieldName}' is required (Null Allowed: ${rule.nullAllowed ? 'Yes' : 'No'}) but contains empty/null/blank value`);
       return result;
     }
 
     // Skip validation if value is empty and not required
-    if (!rule.required && (value === undefined || value === null || value === '')) {
+    if (!rule.required && this.isEmptyValue(value)) {
       return result;
     }
 
@@ -159,7 +203,10 @@ class CSVValidator {
     if (rule.dataType) {
       const typeValidation = this.validateDataType(stringValue, rule.dataType, rule.originalDataType);
       if (!typeValidation.isValid) {
-        result.errors.push(`Field '${fieldName}' has invalid data type. Expected: ${rule.originalDataType}, Got: ${stringValue}`);
+        const errorMessage = typeValidation.details 
+          ? `Field '${fieldName}' has invalid data type. Expected: ${rule.originalDataType}, Got: '${stringValue}'. ${typeValidation.details}`
+          : `Field '${fieldName}' has invalid data type. Expected: ${rule.originalDataType}, Got: '${stringValue}'`;
+        result.errors.push(errorMessage);
       }
     }
 
@@ -207,21 +254,41 @@ class CSVValidator {
         return { isValid: true };
       case 'number':
       case 'integer':
-        return { isValid: !isNaN(Number(value)) && Number.isInteger(Number(value)) };
+        const intValidation = !isNaN(Number(value)) && Number.isInteger(Number(value));
+        return { 
+          isValid: intValidation,
+          details: intValidation ? null : `Value '${value}' is not a valid integer`
+        };
       case 'decimal':
         const decimalValidation = this.validateDecimal(value, originalDataType);
         return decimalValidation;
       case 'date':
       case 'timestamp':
-        return { isValid: !isNaN(Date.parse(value)) };
+        const dateValidation = !isNaN(Date.parse(value));
+        return { 
+          isValid: dateValidation,
+          details: dateValidation ? null : `Value '${value}' is not a valid date/timestamp`
+        };
       case 'email':
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return { isValid: emailRegex.test(value) };
+        const emailValidation = emailRegex.test(value);
+        return { 
+          isValid: emailValidation,
+          details: emailValidation ? null : `Value '${value}' is not a valid email address`
+        };
       case 'phone':
         const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
-        return { isValid: phoneRegex.test(value.replace(/[\s\-\(\)]/g, '')) };
+        const phoneValidation = phoneRegex.test(value.replace(/[\s\-\(\)]/g, ''));
+        return { 
+          isValid: phoneValidation,
+          details: phoneValidation ? null : `Value '${value}' is not a valid phone number`
+        };
       case 'boolean':
-        return { isValid: this.isValidBoolean(value) };
+        const boolValidation = this.isValidBoolean(value);
+        return { 
+          isValid: boolValidation,
+          details: boolValidation ? null : `Value '${value}' is not a valid boolean (expected: true/false, yes/no, 1/0)`
+        };
       default:
         return { isValid: true };
     }
@@ -234,7 +301,10 @@ class CSVValidator {
    */
   validateDecimal(value, originalDataType) {
     if (isNaN(Number(value))) {
-      return { isValid: false };
+      return { 
+        isValid: false, 
+        details: `Value '${value}' is not a valid number` 
+      };
     }
 
     const decimalInfo = this.parseDecimalPrecision(originalDataType);
@@ -254,7 +324,10 @@ class CSVValidator {
     if (!numStr.includes('.')) {
       // Integer - check total precision (integer part length)
       if (numStr.length > decimalInfo.precision) {
-        return { isValid: false };
+        return { 
+          isValid: false, 
+          details: `Integer value '${value}' exceeds maximum precision of ${decimalInfo.precision} digits. Expected format: ${originalDataType}` 
+        };
       }
     } else {
       // Decimal - check precision and scale
@@ -264,20 +337,29 @@ class CSVValidator {
       
       // Check decimal places (scale) - must have exactly the specified scale
       if (decimalPart && decimalPart.length !== decimalInfo.scale) {
-        return { isValid: false };
+        return { 
+          isValid: false, 
+          details: `Decimal value '${value}' must have exactly ${decimalInfo.scale} decimal places. Expected format: ${originalDataType}` 
+        };
       }
       
       // Check total digits (integer + decimal parts)
       const totalDigits = integerPart.length + (decimalPart ? decimalPart.length : 0);
       if (totalDigits > decimalInfo.precision) {
-        return { isValid: false };
+        return { 
+          isValid: false, 
+          details: `Value '${value}' exceeds maximum precision of ${decimalInfo.precision} total digits. Expected format: ${originalDataType}` 
+        };
       }
       
       // Additional check: ensure integer part doesn't exceed (precision - scale)
       // This prevents cases like DECIMAL(5,2) with 1234.5 (4 digits + 1 decimal = 5 total, but integer part 1234 exceeds 3)
       const maxIntegerDigits = decimalInfo.precision - decimalInfo.scale;
       if (integerPart.length > maxIntegerDigits) {
-        return { isValid: false };
+        return { 
+          isValid: false, 
+          details: `Integer part '${integerPart}' exceeds maximum of ${maxIntegerDigits} digits. Expected format: ${originalDataType}` 
+        };
       }
     }
 
@@ -308,6 +390,18 @@ class CSVValidator {
     if (typeof value === 'string') {
       const lowerValue = value.toLowerCase();
       return lowerValue === 'true' || lowerValue === 'yes' || lowerValue === '1' || lowerValue === 'no';
+    }
+    return false;
+  }
+
+  /**
+   * Check if a value is considered empty (null, undefined, empty string, or whitespace-only)
+   * @param {*} value - The value to check
+   */
+  isEmptyValue(value) {
+    if (value === undefined || value === null) return true;
+    if (typeof value === 'string') {
+      return value.trim() === '';
     }
     return false;
   }
@@ -423,14 +517,63 @@ class CSVValidator {
     const totalErrors = this.validationResults.reduce((sum, r) => sum + r.errors.length, 0);
     const totalWarnings = this.validationResults.reduce((sum, r) => sum + r.warnings.length, 0);
 
-    return [
+    // Collect unique error types
+    const uniqueErrors = new Set();
+    const errorTypeCounts = {};
+    
+    this.validationResults.forEach(result => {
+      result.errors.forEach(error => {
+        let errorType = 'Unknown Error';
+        if (error.includes('required') && (error.includes('missing') || error.includes('empty/null/blank'))) {
+          errorType = 'Required Field Missing';
+        } else if (error.includes('invalid data type')) {
+          errorType = 'Invalid Data Type';
+        } else if (error.includes('not a valid')) {
+          errorType = 'Invalid Format';
+        } else if (error.includes('precision') || error.includes('decimal places') || error.includes('exceeds maximum')) {
+          errorType = 'Decimal Precision Error';
+        } else if (error.includes('too short') || error.includes('too long')) {
+          errorType = 'Length Constraint Error';
+        } else if (error.includes('pattern')) {
+          errorType = 'Pattern Mismatch';
+        } else if (error.includes('allowed values')) {
+          errorType = 'Invalid Value';
+        } else if (error.includes('not a valid number')) {
+          errorType = 'Invalid Number Format';
+        } else if (error.includes('not a valid integer')) {
+          errorType = 'Invalid Integer Format';
+        } else if (error.includes('not a valid boolean')) {
+          errorType = 'Invalid Boolean Format';
+        } else if (error.includes('not a valid date') || error.includes('not a valid timestamp')) {
+          errorType = 'Invalid Date/Time Format';
+        }
+        uniqueErrors.add(errorType);
+        errorTypeCounts[errorType] = (errorTypeCounts[errorType] || 0) + 1;
+      });
+    });
+
+    const summaryData = [
       { Metric: 'Total Records', Value: totalRecords },
       { Metric: 'Valid Records', Value: validRecords },
       { Metric: 'Invalid Records', Value: invalidRecords },
       { Metric: 'Total Errors', Value: totalErrors },
       { Metric: 'Total Warnings', Value: totalWarnings },
-      { Metric: 'Success Rate', Value: `${((validRecords / totalRecords) * 100).toFixed(2)}%` }
+      { Metric: 'Success Rate', Value: `${((validRecords / totalRecords) * 100).toFixed(2)}%` },
+      { Metric: '', Value: '' }, // Empty row for spacing
+      { Metric: 'Unique Error Types Found', Value: uniqueErrors.size },
     ];
+
+    // Add error type breakdown
+    Object.entries(errorTypeCounts)
+      .sort(([,a], [,b]) => b - a)
+      .forEach(([errorType, count]) => {
+        summaryData.push({
+          Metric: `  • ${errorType}`,
+          Value: count
+        });
+      });
+
+    return summaryData;
   }
 
   /**

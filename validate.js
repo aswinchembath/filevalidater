@@ -58,9 +58,16 @@ async function main() {
     console.log('');
     console.log('Mapping File Format:');
     console.log('  - Target Field Name: Field name to validate');
-    console.log('  - Null Allowed: Yes/No (Yes = field can be empty, No = required)');
+    console.log('  - Null Allowed: Yes/No (Yes = field can be empty/null/blank, No = required)');
     console.log('  - Target Data Type: Data type (string, DECIMAL(18,2), boolean, timestamp, etc.)');
-    console.log('  - Description: Field description');
+    console.log('  - Description: Field description (optional)');
+    console.log('');
+    console.log('Data Type Support:');
+    console.log('  - String types: string, text, picklist, multipicklist, textarea, email, url, phone');
+    console.log('  - Numeric types: integer, decimal, number, double, float, currency, percent');
+    console.log('  - Date types: date, timestamp, datetime, time');
+    console.log('  - Boolean types: boolean, bool');
+    console.log('  - Case-insensitive: All data types are handled regardless of case (STRING, String, string)');
     process.exit(1);
   }
 
@@ -103,7 +110,8 @@ async function main() {
     console.log(`\nLoaded ${validator.validationRules.length} validation rules:`);
     validator.validationRules.forEach((rule, index) => {
       const requiredText = rule.required ? 'Required' : 'Optional';
-      console.log(`  ${index + 1}. ${rule.fieldName} (${rule.originalDataType}) - ${requiredText}`);
+      const nullAllowedText = rule.nullAllowed ? 'Yes' : 'No';
+      console.log(`  ${index + 1}. ${rule.fieldName} (${rule.originalDataType}) - ${requiredText} (Null Allowed: ${nullAllowedText})`);
     });
 
     // Validate input file
@@ -133,11 +141,39 @@ async function main() {
         console.log('Field Error Summary:');
         console.log('==================');
         const fieldErrors = {};
+        const uniqueErrors = new Set();
         
         validator.validationResults.forEach(result => {
           result.errors.forEach(error => {
             const fieldName = validator.extractFieldNameFromError(error);
             fieldErrors[fieldName] = (fieldErrors[fieldName] || 0) + 1;
+            
+            // Extract unique error types
+            let errorType = 'Unknown Error';
+            if (error.includes('required') && (error.includes('missing') || error.includes('empty/null/blank'))) {
+              errorType = 'Required Field Missing';
+            } else if (error.includes('invalid data type')) {
+              errorType = 'Invalid Data Type';
+            } else if (error.includes('not a valid')) {
+              errorType = 'Invalid Format';
+            } else if (error.includes('precision') || error.includes('decimal places') || error.includes('exceeds maximum')) {
+              errorType = 'Decimal Precision Error';
+            } else if (error.includes('too short') || error.includes('too long')) {
+              errorType = 'Length Constraint Error';
+            } else if (error.includes('pattern')) {
+              errorType = 'Pattern Mismatch';
+            } else if (error.includes('allowed values')) {
+              errorType = 'Invalid Value';
+            } else if (error.includes('not a valid number')) {
+              errorType = 'Invalid Number Format';
+            } else if (error.includes('not a valid integer')) {
+              errorType = 'Invalid Integer Format';
+            } else if (error.includes('not a valid boolean')) {
+              errorType = 'Invalid Boolean Format';
+            } else if (error.includes('not a valid date') || error.includes('not a valid timestamp')) {
+              errorType = 'Invalid Date/Time Format';
+            }
+            uniqueErrors.add(errorType);
           });
         });
 
@@ -146,6 +182,13 @@ async function main() {
           .forEach(([field, count]) => {
             console.log(`  ${field}: ${count} errors`);
           });
+        
+        console.log('');
+        console.log('Unique Error Types Found:');
+        console.log('========================');
+        Array.from(uniqueErrors).sort().forEach(errorType => {
+          console.log(`  • ${errorType}`);
+        });
         
         console.log('');
         console.log('❌ Validation completed with errors. Please check the Excel report for details.');
