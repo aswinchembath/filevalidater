@@ -417,35 +417,130 @@ class CSVValidator {
   }
 
   /**
+   * Validate headers match between input file and mapping rules
+   * @param {string} inputFilePath - Path to the input file
+   * @param {string} delimiter - Delimiter character
+   */
+  validateHeaders(inputFilePath, delimiter) {
+    return new Promise((resolve, reject) => {
+      try {
+        // Read the first line to get headers
+        const content = fs.readFileSync(inputFilePath, 'utf8');
+        const firstLine = content.split('\n')[0];
+        const inputHeaders = firstLine.split(delimiter).map(header => header.trim().replace(/"/g, ''));
+        
+        // Get expected headers from validation rules
+        const expectedHeaders = this.validationRules.map(rule => rule.fieldName);
+        
+        // Find missing and extra headers
+        const missingHeaders = expectedHeaders.filter(header => !inputHeaders.includes(header));
+        const extraHeaders = inputHeaders.filter(header => !expectedHeaders.includes(header));
+        
+        const headerValidation = {
+          isValid: missingHeaders.length === 0 && extraHeaders.length === 0,
+          inputHeaders,
+          expectedHeaders,
+          missingHeaders,
+          extraHeaders,
+          totalExpected: expectedHeaders.length,
+          totalFound: inputHeaders.length
+        };
+        
+        resolve(headerValidation);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  /**
    * Validate input file (supports both CSV and pipe-delimited)
    * @param {string} inputFilePath - Path to the input file
    * @param {string} delimiter - Delimiter character (default: auto-detect)
    */
   validateInputFile(inputFilePath, delimiter = null) {
-    return new Promise((resolve, reject) => {
-      const results = [];
-      let rowNumber = 1; // Start from 1 for user-friendly reporting
+    return new Promise(async (resolve, reject) => {
+      try {
+        // Auto-detect delimiter if not specified
+        if (!delimiter) {
+          delimiter = this.detectDelimiter(inputFilePath);
+        }
 
-      // Auto-detect delimiter if not specified
-      if (!delimiter) {
-        delimiter = this.detectDelimiter(inputFilePath);
+        // First validate headers
+        console.log('Validating headers...');
+        const headerValidation = await this.validateHeaders(inputFilePath, delimiter);
+        
+        if (!headerValidation.isValid) {
+          console.log('\n❌ Header Validation Failed!');
+          console.log('==========================');
+          console.log(`Expected ${headerValidation.totalExpected} headers, found ${headerValidation.totalFound}`);
+          
+          if (headerValidation.missingHeaders.length > 0) {
+            console.log(`\nMissing Headers (${headerValidation.missingHeaders.length}):`);
+            headerValidation.missingHeaders.forEach(header => {
+              console.log(`  - ${header}`);
+            });
+          }
+          
+          if (headerValidation.extraHeaders.length > 0) {
+            console.log(`\nExtra Headers (${headerValidation.extraHeaders.length}):`);
+            headerValidation.extraHeaders.forEach(header => {
+              console.log(`  - ${header}`);
+            });
+          }
+          
+          console.log('\n💡 Suggestion: Please ensure your input CSV file headers exactly match the mapping file field names.');
+          console.log('   Headers are case-sensitive and must match exactly.\n');
+          
+          // Store header validation result for reporting even when it fails
+          this.headerValidationResult = headerValidation;
+          
+          // Generate header validation report before rejecting
+          try {
+            const artifactsPath = require('path').join(__dirname, 'artifacts');
+            if (!fs.existsSync(artifactsPath)) {
+              fs.mkdirSync(artifactsPath, { recursive: true });
+            }
+            
+            const headerReportPath = require('path').join(artifactsPath, 'header_validation_report.xlsx');
+            this.generateHeaderValidationReport(headerReportPath);
+            console.log(`📊 Header validation report saved to: ${headerReportPath}`);
+          } catch (reportError) {
+            console.log('⚠️  Could not generate header validation report:', reportError.message);
+          }
+          
+          reject(new Error('Header validation failed - input file headers do not match mapping file'));
+          return;
+        }
+        
+        console.log('✅ Headers validated successfully!');
+        console.log(`   Found all ${headerValidation.totalExpected} expected headers`);
+
+        // Store header validation result for reporting
+        this.headerValidationResult = headerValidation;
+
+        // Proceed with data validation
+        const results = [];
+        let rowNumber = 1; // Start from 1 for user-friendly reporting
+
+        fs.createReadStream(inputFilePath)
+          .pipe(csv({ separator: delimiter }))
+          .on('data', (row) => {
+            const validationResult = this.validateRecord(row, rowNumber);
+            results.push(validationResult);
+            rowNumber++;
+          })
+          .on('end', () => {
+            this.validationResults = results;
+            console.log(`Validated ${results.length} records using delimiter: '${delimiter}'`);
+            resolve(results);
+          })
+          .on('error', (error) => {
+            reject(error);
+          });
+      } catch (error) {
+        reject(error);
       }
-
-      fs.createReadStream(inputFilePath)
-        .pipe(csv({ separator: delimiter }))
-        .on('data', (row) => {
-          const validationResult = this.validateRecord(row, rowNumber);
-          results.push(validationResult);
-          rowNumber++;
-        })
-        .on('end', () => {
-          this.validationResults = results;
-          console.log(`Validated ${results.length} records using delimiter: '${delimiter}'`);
-          resolve(results);
-        })
-        .on('error', (error) => {
-          reject(error);
-        });
     });
   }
 
@@ -474,6 +569,35 @@ class CSVValidator {
   }
 
   /**
+   * Generate standalone header validation report
+   * @param {string} outputFilePath - Path for the output Excel file
+   */
+  generateHeaderValidationReport(outputFilePath) {
+    if (!this.headerValidationResult) {
+      throw new Error('No header validation results available.');
+    }
+
+    // Create workbook and worksheets
+    const workbook = XLSX.utils.book_new();
+    
+    // Header validation worksheet
+    const headerData = this.generateProfessionalHeaderData();
+    const headerSheet = XLSX.utils.json_to_sheet(headerData);
+    this.formatWorksheet(headerSheet, 'header');
+    XLSX.utils.book_append_sheet(workbook, headerSheet, '🔍 Header Validation');
+
+    // Validation rules worksheet
+    const rulesData = this.generateProfessionalRulesData();
+    const rulesSheet = XLSX.utils.json_to_sheet(rulesData);
+    this.formatWorksheet(rulesSheet, 'rules');
+    XLSX.utils.book_append_sheet(workbook, rulesSheet, '📋 Expected Headers');
+
+    // Write to file
+    XLSX.writeFile(workbook, outputFilePath);
+    console.log(`Header validation report generated: ${outputFilePath}`);
+  }
+
+  /**
    * Generate Excel report with validation results
    * @param {string} outputFilePath - Path for the output Excel file
    */
@@ -485,95 +609,199 @@ class CSVValidator {
     // Create workbook and worksheets
     const workbook = XLSX.utils.book_new();
     
-    // Summary worksheet
-    const summaryData = this.generateSummaryData();
-    const summarySheet = XLSX.utils.json_to_sheet(summaryData);
-    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+    // Executive Summary worksheet
+    const executiveSummaryData = this.generateExecutiveSummaryData();
+    const executiveSummarySheet = XLSX.utils.json_to_sheet(executiveSummaryData);
+    this.formatWorksheet(executiveSummarySheet, 'executive');
+    XLSX.utils.book_append_sheet(workbook, executiveSummarySheet, '📊 Executive Summary');
+
+    // Header Validation worksheet (if headers were validated)
+    if (this.headerValidationResult) {
+      const headerData = this.generateProfessionalHeaderData();
+      const headerSheet = XLSX.utils.json_to_sheet(headerData);
+      this.formatWorksheet(headerSheet, 'header');
+      XLSX.utils.book_append_sheet(workbook, headerSheet, '🔍 Header Validation');
+    }
+
+    // Validation Rules worksheet
+    const rulesData = this.generateProfessionalRulesData();
+    const rulesSheet = XLSX.utils.json_to_sheet(rulesData);
+    this.formatWorksheet(rulesSheet, 'rules');
+    XLSX.utils.book_append_sheet(workbook, rulesSheet, '📋 Validation Rules');
 
     // Detailed results worksheet
-    const detailedData = this.generateDetailedData();
+    const detailedData = this.generateProfessionalDetailedData();
     const detailedSheet = XLSX.utils.json_to_sheet(detailedData);
-    XLSX.utils.book_append_sheet(workbook, detailedSheet, 'Validation Results');
+    this.formatWorksheet(detailedSheet, 'detailed');
+    XLSX.utils.book_append_sheet(workbook, detailedSheet, '📄 Validation Results');
 
     // Error details worksheet
-    const errorData = this.generateErrorData();
+    const errorData = this.generateProfessionalErrorData();
     if (errorData.length > 0) {
       const errorSheet = XLSX.utils.json_to_sheet(errorData);
-      XLSX.utils.book_append_sheet(workbook, errorSheet, 'Error Details');
+      this.formatWorksheet(errorSheet, 'errors');
+      XLSX.utils.book_append_sheet(workbook, errorSheet, '⚠️ Error Analysis');
     }
+
+    // Data Quality Dashboard
+    const dashboardData = this.generateDataQualityDashboard();
+    const dashboardSheet = XLSX.utils.json_to_sheet(dashboardData);
+    this.formatWorksheet(dashboardSheet, 'dashboard');
+    XLSX.utils.book_append_sheet(workbook, dashboardSheet, '📈 Data Quality Dashboard');
 
     // Write to file
     XLSX.writeFile(workbook, outputFilePath);
-    console.log(`Excel report generated: ${outputFilePath}`);
+    console.log(`Professional Excel report generated: ${outputFilePath}`);
   }
 
   /**
-   * Generate summary data for Excel report
+   * Generate executive summary data for professional report
    */
-  generateSummaryData() {
+  generateExecutiveSummaryData() {
     const totalRecords = this.validationResults.length;
     const validRecords = this.validationResults.filter(r => r.isValid).length;
     const invalidRecords = totalRecords - validRecords;
     const totalErrors = this.validationResults.reduce((sum, r) => sum + r.errors.length, 0);
     const totalWarnings = this.validationResults.reduce((sum, r) => sum + r.warnings.length, 0);
+    const successRate = ((validRecords / totalRecords) * 100);
 
-    // Collect unique error types
-    const uniqueErrors = new Set();
-    const errorTypeCounts = {};
+    // Generate timestamp
+    const timestamp = new Date().toLocaleString();
     
+    return [
+      { Section: 'VALIDATION REPORT', Value: '', Details: '', Status: '' },
+      { Section: 'Generated On', Value: timestamp, Details: 'Report generation timestamp', Status: '' },
+      { Section: '', Value: '', Details: '', Status: '' },
+      
+      { Section: '📊 EXECUTIVE SUMMARY', Value: '', Details: '', Status: '' },
+      { Section: 'Data Quality Score', Value: `${successRate.toFixed(1)}%`, Details: `${validRecords} of ${totalRecords} records passed validation`, Status: successRate >= 95 ? '✅ Excellent' : successRate >= 80 ? '⚠️ Good' : '❌ Needs Attention' },
+      { Section: 'Total Records Processed', Value: totalRecords, Details: 'Total number of data records analyzed', Status: '📄' },
+      { Section: 'Valid Records', Value: validRecords, Details: 'Records that passed all validation checks', Status: '✅' },
+      { Section: 'Invalid Records', Value: invalidRecords, Details: 'Records with validation errors', Status: invalidRecords > 0 ? '⚠️' : '✅' },
+      { Section: 'Total Validation Errors', Value: totalErrors, Details: 'Sum of all validation errors found', Status: totalErrors > 0 ? '❌' : '✅' },
+      { Section: 'Total Warnings', Value: totalWarnings, Details: 'Non-critical validation warnings', Status: totalWarnings > 0 ? '⚠️' : '✅' },
+      { Section: '', Value: '', Details: '', Status: '' },
+      
+      { Section: '🔍 VALIDATION COVERAGE', Value: '', Details: '', Status: '' },
+      { Section: 'Fields Validated', Value: this.validationRules.length, Details: 'Total number of fields checked', Status: '📋' },
+      { Section: 'Total Field Validations', Value: totalRecords * this.validationRules.length, Details: 'Total validation operations performed', Status: '🔧' },
+      { Section: 'Required Fields', Value: this.validationRules.filter(r => r.required).length, Details: 'Fields that cannot be empty', Status: '🔒' },
+      { Section: 'Optional Fields', Value: this.validationRules.filter(r => !r.required).length, Details: 'Fields that can be empty', Status: '🔓' },
+      { Section: '', Value: '', Details: '', Status: '' },
+      
+      { Section: '📈 RECOMMENDATIONS', Value: '', Details: '', Status: '' },
+      { Section: 'Priority Level', Value: successRate >= 95 ? 'Low' : successRate >= 80 ? 'Medium' : 'High', Details: 'Recommended action priority based on data quality', Status: successRate >= 95 ? '🟢' : successRate >= 80 ? '🟡' : '🔴' },
+      { Section: 'Next Steps', Value: invalidRecords > 0 ? 'Review Error Analysis tab' : 'Data ready for processing', Details: 'Recommended next actions', Status: invalidRecords > 0 ? '📋' : '🚀' }
+    ];
+  }
+
+  /**
+   * Generate data quality dashboard
+   */
+  generateDataQualityDashboard() {
+    const totalRecords = this.validationResults.length;
+    const validRecords = this.validationResults.filter(r => r.isValid).length;
+    const invalidRecords = totalRecords - validRecords;
+    
+    // Calculate error distribution by type
+    const errorTypes = {};
     this.validationResults.forEach(result => {
       result.errors.forEach(error => {
-        let errorType = 'Unknown Error';
-        if (error.includes('required') && (error.includes('missing') || error.includes('empty/null/blank'))) {
-          errorType = 'Required Field Missing';
-        } else if (error.includes('invalid data type')) {
-          errorType = 'Invalid Data Type';
-        } else if (error.includes('not a valid')) {
-          errorType = 'Invalid Format';
-        } else if (error.includes('precision') || error.includes('decimal places') || error.includes('exceeds maximum')) {
-          errorType = 'Decimal Precision Error';
-        } else if (error.includes('too short') || error.includes('too long')) {
-          errorType = 'Length Constraint Error';
-        } else if (error.includes('pattern')) {
-          errorType = 'Pattern Mismatch';
-        } else if (error.includes('allowed values')) {
-          errorType = 'Invalid Value';
-        } else if (error.includes('not a valid number')) {
-          errorType = 'Invalid Number Format';
-        } else if (error.includes('not a valid integer')) {
-          errorType = 'Invalid Integer Format';
-        } else if (error.includes('not a valid boolean')) {
-          errorType = 'Invalid Boolean Format';
-        } else if (error.includes('not a valid date') || error.includes('not a valid timestamp')) {
-          errorType = 'Invalid Date/Time Format';
-        }
-        uniqueErrors.add(errorType);
-        errorTypeCounts[errorType] = (errorTypeCounts[errorType] || 0) + 1;
+        let errorType = this.categorizeError(error);
+        errorTypes[errorType] = (errorTypes[errorType] || 0) + 1;
       });
     });
 
-    const summaryData = [
-      { Metric: 'Total Records', Value: totalRecords },
-      { Metric: 'Valid Records', Value: validRecords },
-      { Metric: 'Invalid Records', Value: invalidRecords },
-      { Metric: 'Total Errors', Value: totalErrors },
-      { Metric: 'Total Warnings', Value: totalWarnings },
-      { Metric: 'Success Rate', Value: `${((validRecords / totalRecords) * 100).toFixed(2)}%` },
-      { Metric: '', Value: '' }, // Empty row for spacing
-      { Metric: 'Unique Error Types Found', Value: uniqueErrors.size },
+    // Calculate field error rates
+    const fieldErrors = {};
+    this.validationResults.forEach(result => {
+      result.errors.forEach(error => {
+        const fieldName = this.extractFieldNameFromError(error);
+        fieldErrors[fieldName] = (fieldErrors[fieldName] || 0) + 1;
+      });
+    });
+
+    const dashboardData = [
+      { Metric: '📊 DATA QUALITY DASHBOARD', Value: '', Percentage: '', Trend: '', Risk: '' },
+      { Metric: '', Value: '', Percentage: '', Trend: '', Risk: '' },
+      
+      { Metric: '🎯 QUALITY METRICS', Value: '', Percentage: '', Trend: '', Risk: '' },
+      { Metric: 'Overall Data Quality', Value: `${validRecords}/${totalRecords}`, Percentage: `${((validRecords/totalRecords)*100).toFixed(1)}%`, Trend: '📈', Risk: validRecords/totalRecords >= 0.95 ? 'Low' : validRecords/totalRecords >= 0.8 ? 'Medium' : 'High' },
+      { Metric: 'Error Rate', Value: `${invalidRecords}/${totalRecords}`, Percentage: `${((invalidRecords/totalRecords)*100).toFixed(1)}%`, Trend: '📉', Risk: invalidRecords/totalRecords <= 0.05 ? 'Low' : invalidRecords/totalRecords <= 0.2 ? 'Medium' : 'High' },
+      { Metric: '', Value: '', Percentage: '', Trend: '', Risk: '' },
+      
+      { Metric: '⚠️ TOP ERROR TYPES', Value: '', Percentage: '', Trend: '', Risk: '' }
     ];
 
-    // Add error type breakdown
-    Object.entries(errorTypeCounts)
+    // Add top error types
+    Object.entries(errorTypes)
       .sort(([,a], [,b]) => b - a)
+      .slice(0, 5)
       .forEach(([errorType, count]) => {
-        summaryData.push({
-          Metric: `  • ${errorType}`,
-          Value: count
+        dashboardData.push({
+          Metric: errorType,
+          Value: count,
+          Percentage: `${((count/Object.values(errorTypes).reduce((a,b) => a+b, 0))*100).toFixed(1)}%`,
+          Trend: '📊',
+          Risk: count > totalRecords * 0.1 ? 'High' : count > totalRecords * 0.05 ? 'Medium' : 'Low'
         });
       });
 
-    return summaryData;
+    dashboardData.push({ Metric: '', Value: '', Percentage: '', Trend: '', Risk: '' });
+    dashboardData.push({ Metric: '🔍 TOP PROBLEMATIC FIELDS', Value: '', Percentage: '', Trend: '', Risk: '' });
+
+    // Add top problematic fields
+    Object.entries(fieldErrors)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5)
+      .forEach(([fieldName, count]) => {
+        dashboardData.push({
+          Metric: fieldName,
+          Value: count,
+          Percentage: `${((count/totalRecords)*100).toFixed(1)}%`,
+          Trend: '📊',
+          Risk: count > totalRecords * 0.1 ? 'High' : count > totalRecords * 0.05 ? 'Medium' : 'Low'
+        });
+      });
+
+    return dashboardData;
+  }
+
+  /**
+   * Categorize error for better analysis
+   */
+  categorizeError(error) {
+    if (error.includes('required') && (error.includes('missing') || error.includes('empty/null/blank'))) {
+      return 'Required Field Missing';
+    } else if (error.includes('invalid data type')) {
+      return 'Invalid Data Type';
+    } else if (error.includes('not a valid')) {
+      return 'Invalid Format';
+    } else if (error.includes('precision') || error.includes('decimal places') || error.includes('exceeds maximum')) {
+      return 'Decimal Precision Error';
+    } else if (error.includes('too short') || error.includes('too long')) {
+      return 'Length Constraint Error';
+    } else if (error.includes('pattern')) {
+      return 'Pattern Mismatch';
+    } else if (error.includes('allowed values')) {
+      return 'Invalid Value';
+    } else if (error.includes('not a valid number')) {
+      return 'Invalid Number Format';
+    } else if (error.includes('not a valid integer')) {
+      return 'Invalid Integer Format';
+    } else if (error.includes('not a valid boolean')) {
+      return 'Invalid Boolean Format';
+    } else if (error.includes('not a valid date') || error.includes('not a valid timestamp')) {
+      return 'Invalid Date/Time Format';
+    }
+    return 'Other Error';
+  }
+
+  /**
+   * Generate summary data for Excel report (backward compatibility)
+   */
+  generateSummaryData() {
+    return this.generateExecutiveSummaryData();
   }
 
   /**
@@ -597,6 +825,309 @@ class CSVValidator {
 
       return row;
     });
+  }
+
+  /**
+   * Generate professional header validation data
+   */
+  generateProfessionalHeaderData() {
+    const timestamp = new Date().toLocaleString();
+    const headerData = [
+      { Category: '🔍 HEADER VALIDATION REPORT', Status: '', 'Header Name': '', Description: '', Action: '' },
+      { Category: 'Generated On', Status: timestamp, 'Header Name': '', Description: 'Validation timestamp', Action: '' },
+      { Category: '', Status: '', 'Header Name': '', Description: '', Action: '' },
+      
+      { Category: '📊 VALIDATION SUMMARY', Status: '', 'Header Name': '', Description: '', Action: '' },
+      { Category: 'Overall Status', Status: this.headerValidationResult.isValid ? '✅ PASSED' : '❌ FAILED', 'Header Name': '', Description: 'Header validation result', Action: this.headerValidationResult.isValid ? 'Proceed to data validation' : 'Fix header mismatches' },
+      { Category: 'Expected Headers', Status: this.headerValidationResult.totalExpected, 'Header Name': '', Description: 'Number of headers defined in mapping', Action: '' },
+      { Category: 'Found Headers', Status: this.headerValidationResult.totalFound, 'Header Name': '', Description: 'Number of headers in input file', Action: '' },
+      { Category: 'Missing Headers', Status: this.headerValidationResult.missingHeaders.length, 'Header Name': '', Description: 'Headers expected but not found', Action: this.headerValidationResult.missingHeaders.length > 0 ? 'Add missing headers' : '' },
+      { Category: 'Extra Headers', Status: this.headerValidationResult.extraHeaders.length, 'Header Name': '', Description: 'Headers found but not expected', Action: this.headerValidationResult.extraHeaders.length > 0 ? 'Remove extra headers' : '' },
+      { Category: '', Status: '', 'Header Name': '', Description: '', Action: '' },
+      
+      { Category: '📋 DETAILED HEADER ANALYSIS', Status: '', 'Header Name': '', Description: '', Action: '' }
+    ];
+    
+    // Add detailed header validation
+    this.headerValidationResult.expectedHeaders.forEach(header => {
+      const found = this.headerValidationResult.inputHeaders.includes(header);
+      headerData.push({
+        Category: 'Expected Header',
+        Status: found ? '✅ Found' : '❌ Missing',
+        'Header Name': header,
+        Description: found ? 'Header correctly present in input file' : 'Header missing from input file',
+        Action: found ? '' : 'Add this header to input file'
+      });
+    });
+    
+    // Add extra headers if any
+    if (this.headerValidationResult.extraHeaders.length > 0) {
+      headerData.push({ Category: '', Status: '', 'Header Name': '', Description: '', Action: '' });
+      headerData.push({ Category: '⚠️ EXTRA HEADERS FOUND', Status: '', 'Header Name': '', Description: '', Action: '' });
+      
+      this.headerValidationResult.extraHeaders.forEach(header => {
+        headerData.push({
+          Category: 'Extra Header',
+          Status: '⚠️ Unexpected',
+          'Header Name': header,
+          Description: 'Header found in input but not defined in mapping',
+          Action: 'Remove from input or add to mapping'
+        });
+      });
+    }
+    
+    return headerData;
+  }
+
+  /**
+   * Generate header validation data for Excel report (backward compatibility)
+   */
+  generateHeaderValidationData() {
+    return this.generateProfessionalHeaderData();
+  }
+
+  /**
+   * Generate professional validation rules data
+   */
+  generateProfessionalRulesData() {
+    const rulesData = [
+      { Category: '📋 VALIDATION RULES CONFIGURATION', 'Field Name': '', 'Data Type': '', 'Business Rule': '', 'Validation Logic': '', Priority: '' },
+      { Category: `Total Rules: ${this.validationRules.length}`, 'Field Name': '', 'Data Type': '', 'Business Rule': '', 'Validation Logic': '', Priority: '' },
+      { Category: '', 'Field Name': '', 'Data Type': '', 'Business Rule': '', 'Validation Logic': '', Priority: '' }
+    ];
+    
+    this.validationRules.forEach((rule, index) => {
+      const priority = rule.required ? '🔴 Critical' : '🟡 Standard';
+      const businessRule = `${rule.required ? 'Mandatory' : 'Optional'} ${rule.originalDataType} field`;
+      const validationLogic = this.getDetailedValidationLogic(rule);
+      
+      rulesData.push({
+        Category: `Rule ${index + 1}`,
+        'Field Name': rule.fieldName,
+        'Data Type': rule.originalDataType,
+        'Business Rule': businessRule,
+        'Validation Logic': validationLogic,
+        Priority: priority
+      });
+    });
+
+    return rulesData;
+  }
+
+  /**
+   * Get detailed validation logic description
+   */
+  getDetailedValidationLogic(rule) {
+    const validations = [];
+    
+    if (rule.required) {
+      validations.push('✓ Required field validation');
+    } else {
+      validations.push('✓ Optional field (null allowed)');
+    }
+    
+    if (rule.dataType) {
+      validations.push(`✓ ${rule.dataType.toUpperCase()} type validation`);
+    }
+    
+    if (rule.minLength !== undefined) {
+      validations.push(`✓ Minimum length: ${rule.minLength} characters`);
+    }
+    
+    if (rule.maxLength !== undefined) {
+      validations.push(`✓ Maximum length: ${rule.maxLength} characters`);
+    }
+    
+    if (rule.pattern) {
+      validations.push('✓ Pattern/Format validation');
+    }
+    
+    if (rule.allowedValues) {
+      validations.push('✓ Allowed values validation');
+    }
+
+    return validations.join(' | ') || 'Basic validation';
+  }
+
+  /**
+   * Generate professional detailed validation data
+   */
+  generateProfessionalDetailedData() {
+    const detailedData = [
+      { Category: '📄 DETAILED VALIDATION RESULTS', 'Row #': '', Status: '', 'Error Count': '', 'Error Summary': '', 'Data Quality': '' },
+      { Category: `Total Records: ${this.validationResults.length}`, 'Row #': '', Status: '', 'Error Count': '', 'Error Summary': '', 'Data Quality': '' },
+      { Category: '', 'Row #': '', Status: '', 'Error Count': '', 'Error Summary': '', 'Data Quality': '' }
+    ];
+    
+    this.validationResults.forEach(result => {
+      const dataQuality = result.isValid ? '✅ High' : result.errors.length <= 2 ? '⚠️ Medium' : '❌ Low';
+      const errorSummary = result.errors.length > 0 ? result.errors.slice(0, 2).join('; ') + (result.errors.length > 2 ? '...' : '') : 'No errors';
+      
+      detailedData.push({
+        Category: 'Data Record',
+        'Row #': result.rowNumber,
+        Status: result.isValid ? '✅ Valid' : '❌ Invalid',
+        'Error Count': result.errors.length,
+        'Error Summary': errorSummary,
+        'Data Quality': dataQuality
+      });
+    });
+
+    return detailedData;
+  }
+
+  /**
+   * Generate professional error analysis data
+   */
+  generateProfessionalErrorData() {
+    const errorData = [
+      { Category: '⚠️ ERROR ANALYSIS REPORT', 'Row #': '', 'Field Name': '', 'Error Type': '', 'Error Message': '', 'Severity': '' },
+      { Category: `Total Errors: ${this.validationResults.reduce((sum, r) => sum + r.errors.length, 0)}`, 'Row #': '', 'Field Name': '', 'Error Type': '', 'Error Message': '', 'Severity': '' },
+      { Category: '', 'Row #': '', 'Field Name': '', 'Error Type': '', 'Error Message': '', 'Severity': '' }
+    ];
+    
+    this.validationResults.forEach(result => {
+      result.errors.forEach(error => {
+        const fieldName = this.extractFieldNameFromError(error);
+        const errorType = this.categorizeError(error);
+        const severity = error.includes('required') ? '🔴 Critical' : error.includes('invalid data type') ? '🟠 High' : '🟡 Medium';
+        
+        errorData.push({
+          Category: 'Validation Error',
+          'Row #': result.rowNumber,
+          'Field Name': fieldName,
+          'Error Type': errorType,
+          'Error Message': error,
+          'Severity': severity
+        });
+      });
+    });
+
+    return errorData;
+  }
+
+  /**
+   * Add formatting method stub (XLSX formatting is limited in basic version)
+   */
+  formatWorksheet(worksheet, type) {
+    // Basic formatting - can be enhanced with more advanced Excel libraries
+    if (!worksheet['!cols']) {
+      worksheet['!cols'] = [];
+    }
+    
+    // Set column widths based on worksheet type
+    switch (type) {
+      case 'executive':
+        worksheet['!cols'] = [
+          { width: 25 }, // Section
+          { width: 15 }, // Value
+          { width: 40 }, // Details
+          { width: 15 }  // Status
+        ];
+        break;
+      case 'header':
+        worksheet['!cols'] = [
+          { width: 20 }, // Category
+          { width: 15 }, // Status
+          { width: 25 }, // Header Name
+          { width: 40 }, // Description
+          { width: 25 }  // Action
+        ];
+        break;
+      case 'rules':
+        worksheet['!cols'] = [
+          { width: 15 }, // Category
+          { width: 25 }, // Field Name
+          { width: 15 }, // Data Type
+          { width: 25 }, // Business Rule
+          { width: 50 }, // Validation Logic
+          { width: 15 }  // Priority
+        ];
+        break;
+      case 'detailed':
+        worksheet['!cols'] = [
+          { width: 15 }, // Category
+          { width: 10 }, // Row #
+          { width: 15 }, // Status
+          { width: 12 }, // Error Count
+          { width: 50 }, // Error Summary
+          { width: 15 }  // Data Quality
+        ];
+        break;
+      case 'errors':
+        worksheet['!cols'] = [
+          { width: 15 }, // Category
+          { width: 10 }, // Row #
+          { width: 20 }, // Field Name
+          { width: 20 }, // Error Type
+          { width: 60 }, // Error Message
+          { width: 15 }  // Severity
+        ];
+        break;
+      case 'dashboard':
+        worksheet['!cols'] = [
+          { width: 25 }, // Metric
+          { width: 15 }, // Value
+          { width: 12 }, // Percentage
+          { width: 10 }, // Trend
+          { width: 15 }  // Risk
+        ];
+        break;
+    }
+  }
+
+  /**
+   * Generate validation rules data for Excel report (backward compatibility)
+   */
+  generateValidationRulesData() {
+    return this.generateProfessionalRulesData();
+  }
+
+  /**
+   * Generate detailed validation data for Excel report (backward compatibility)
+   */
+  generateDetailedData() {
+    return this.generateProfessionalDetailedData();
+  }
+
+  /**
+   * Generate error details for Excel report (backward compatibility)
+   */
+  generateErrorData() {
+    return this.generateProfessionalErrorData();
+  }
+
+  /**
+   * Get description of validation applied to a rule
+   */
+  getValidationApplied(rule) {
+    const validations = [];
+    
+    if (rule.required) {
+      validations.push('Required field validation');
+    }
+    
+    if (rule.dataType) {
+      validations.push(`${rule.dataType} type validation`);
+    }
+    
+    if (rule.minLength !== undefined) {
+      validations.push(`Min length: ${rule.minLength}`);
+    }
+    
+    if (rule.maxLength !== undefined) {
+      validations.push(`Max length: ${rule.maxLength}`);
+    }
+    
+    if (rule.pattern) {
+      validations.push('Pattern validation');
+    }
+    
+    if (rule.allowedValues) {
+      validations.push('Allowed values validation');
+    }
+
+    return validations.join('; ') || 'Basic validation';
   }
 
   /**

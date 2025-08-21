@@ -114,6 +114,33 @@ async function main() {
       console.log(`  ${index + 1}. ${rule.fieldName} (${rule.originalDataType}) - ${requiredText} (Null Allowed: ${nullAllowedText})`);
     });
 
+    // Display validation summary
+    console.log('\nValidation Rules Summary:');
+    console.log('========================');
+    const ruleTypes = {};
+    validator.validationRules.forEach(rule => {
+      const dataType = rule.originalDataType;
+      ruleTypes[dataType] = (ruleTypes[dataType] || 0) + 1;
+    });
+    
+    Object.entries(ruleTypes)
+      .sort(([,a], [,b]) => b - a)
+      .forEach(([dataType, count]) => {
+        console.log(`  ${dataType}: ${count} fields`);
+      });
+    
+    const requiredCount = validator.validationRules.filter(r => r.required).length;
+    const optionalCount = validator.validationRules.filter(r => !r.required).length;
+    console.log(`  Required Fields: ${requiredCount}`);
+    console.log(`  Optional Fields: ${optionalCount}`);
+    
+    // Display header validation information
+    console.log('\nHeader Validation Information:');
+    console.log('==============================');
+    console.log(`Expected Headers: ${validator.validationRules.length}`);
+    console.log(`Header Validation: Will be performed before data validation`);
+    console.log(`Case Sensitivity: Headers must match exactly (case-sensitive)`);
+
     // Validate input file
     console.log('\nValidating input file...');
     await validator.validateInputFile(inputFile, delimiter);
@@ -137,11 +164,12 @@ async function main() {
       console.log('');
 
       // Show field-level error summary
+      let fieldErrors = {};
+      let uniqueErrors = new Set();
+      
       if (stats.invalidRecords > 0) {
         console.log('Field Error Summary:');
         console.log('==================');
-        const fieldErrors = {};
-        const uniqueErrors = new Set();
         
         validator.validationResults.forEach(result => {
           result.errors.forEach(error => {
@@ -194,11 +222,53 @@ async function main() {
         console.log('❌ Validation completed with errors. Please check the Excel report for details.');
         console.log(`📊 Detailed report saved to: ${outputFile}`);
         console.log(`📁 Check the artifacts folder for all output files`);
-        process.exit(1);
       } else {
         console.log('✅ All records passed validation successfully!');
         console.log(`📊 Report saved to: ${outputFile}`);
         console.log(`📁 Check the artifacts folder for all output files`);
+      }
+
+      // Display validation summary for both success and error cases
+      console.log('');
+      console.log('Validation Summary:');
+      console.log('==================');
+      console.log(`Total Records Processed: ${stats.totalRecords}`);
+      console.log(`Records with Errors: ${stats.invalidRecords}`);
+      console.log(`Records without Errors: ${stats.validRecords}`);
+      console.log(`Total Validation Errors: ${stats.totalErrors}`);
+      console.log(`Total Validation Warnings: ${stats.totalWarnings}`);
+      console.log(`Overall Success Rate: ${stats.successRate.toFixed(2)}%`);
+      
+      // Show validation coverage
+      const totalFields = validator.validationRules.length;
+      const totalValidations = stats.totalRecords * totalFields;
+      console.log('');
+      console.log('Validation Coverage:');
+      console.log('==================');
+      console.log(`Total Fields Validated: ${totalFields}`);
+      console.log(`Total Field Validations: ${totalValidations}`);
+      console.log(`Fields with Errors: ${Object.keys(fieldErrors || {}).length}`);
+      console.log(`Fields without Errors: ${totalFields - (Object.keys(fieldErrors || {}).length)}`);
+      
+      // Show data type breakdown
+      const dataTypeBreakdown = {};
+      validator.validationRules.forEach(rule => {
+        const dataType = rule.originalDataType;
+        dataTypeBreakdown[dataType] = (dataTypeBreakdown[dataType] || 0) + 1;
+      });
+      
+      console.log('');
+      console.log('Data Type Validation Breakdown:');
+      console.log('================================');
+      Object.entries(dataTypeBreakdown)
+        .sort(([,a], [,b]) => b - a)
+        .forEach(([dataType, count]) => {
+          console.log(`  • ${dataType}: ${count} fields validated`);
+        });
+      
+      // Exit after showing all information
+      if (stats.invalidRecords > 0) {
+        process.exit(1);
       }
     }
 
