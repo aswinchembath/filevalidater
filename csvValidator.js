@@ -5,8 +5,12 @@ const _ = require('lodash');
 
 class CSVValidator {
   constructor() {
-    this.validationRules = [];
     this.validationResults = [];
+    this.validationRules = [];
+    this.duplicateResults = [];
+    this.missFormattedResults = [];
+    this.sourceDestinationResults = null;
+    this.headerValidationResult = null;
   }
 
   /**
@@ -417,6 +421,160 @@ class CSVValidator {
   }
 
   /**
+   * Detect duplicate records in the validation results
+   * @param {Array} records - Array of records to check for duplicates
+   * @param {Array} keyFields - Array of field names to use as composite key for duplicate detection
+   */
+  detectDuplicates(records, keyFields = null) {
+    const duplicates = [];
+    const seen = new Map();
+    
+    // If no key fields specified, use all fields
+    const fieldsToCheck = keyFields || Object.keys(records[0] || {});
+    
+    records.forEach((record, index) => {
+      // Create composite key from specified fields
+      const compositeKey = fieldsToCheck.map(field => String(record[field] || '')).join('|');
+      
+      if (seen.has(compositeKey)) {
+        // This is a duplicate
+        const duplicateInfo = {
+          rowNumber: index + 1,
+          originalRowNumber: seen.get(compositeKey) + 1,
+          record: record,
+          compositeKey: compositeKey,
+          keyFields: fieldsToCheck,
+          keyValues: fieldsToCheck.map(field => record[field])
+        };
+        duplicates.push(duplicateInfo);
+      } else {
+        seen.set(compositeKey, index);
+      }
+    });
+
+    this.duplicateResults = duplicates;
+    return duplicates;
+  }
+
+  /**
+   * Detect miss-formatted data based on validation rules
+   * @param {Array} records - Array of records to check
+   */
+  detectMissFormattedData(records) {
+    const missFormatted = [];
+    
+    records.forEach((record, index) => {
+      const rowNumber = index + 1;
+      const issues = [];
+      
+      this.validationRules.forEach(rule => {
+        const fieldValue = record[rule.fieldName];
+        
+        if (!this.isEmptyValue(fieldValue)) {
+          // Check for common formatting issues
+          const formattingIssues = this.checkFormattingIssues(fieldValue, rule, rule.fieldName);
+          if (formattingIssues.length > 0) {
+            issues.push(...formattingIssues);
+          }
+        }
+      });
+      
+      if (issues.length > 0) {
+        missFormatted.push({
+          rowNumber: rowNumber,
+          record: record,
+          issues: issues,
+          issueCount: issues.length
+        });
+      }
+    });
+
+    this.missFormattedResults = missFormatted;
+    return missFormatted;
+  }
+
+  /**
+   * Check for specific formatting issues in a field value
+   * @param {*} value - The field value to check
+   * @param {Object} rule - The validation rule
+   * @param {string} fieldName - The field name
+   */
+  checkFormattingIssues(value, rule, fieldName) {
+    const issues = [];
+    const stringValue = String(value);
+    
+    // Check for leading/trailing whitespace
+    if (typeof value === 'string' && value !== value.trim()) {
+      issues.push(`Field '${fieldName}' has leading/trailing whitespace: '${value}'`);
+    }
+    
+    // Check for inconsistent case in specific fields
+    if (rule.fieldName.toLowerCase().includes('email') && stringValue !== stringValue.toLowerCase()) {
+      issues.push(`Field '${fieldName}' has inconsistent case for email: '${value}'`);
+    }
+    
+    // Check for phone number formatting inconsistencies
+    if (rule.fieldName.toLowerCase().includes('phone') || rule.fieldName.toLowerCase().includes('mobile')) {
+      const cleanPhone = stringValue.replace(/[\s\-\(\)]/g, '');
+      if (cleanPhone.length > 0 && !/^[\+]?[1-9][\d]{0,15}$/.test(cleanPhone)) {
+        issues.push(`Field '${fieldName}' has inconsistent phone number format: '${value}'`);
+      }
+    }
+    
+    // Check for date format inconsistencies
+    if (rule.dataType === 'date' || rule.dataType === 'timestamp') {
+      if (!this.isConsistentDateFormat(stringValue)) {
+        issues.push(`Field '${fieldName}' has inconsistent date format: '${value}'`);
+      }
+    }
+    
+    // Check for decimal format inconsistencies
+    if (rule.dataType === 'decimal') {
+      if (!this.isConsistentDecimalFormat(stringValue, rule.originalDataType)) {
+        issues.push(`Field '${fieldName}' has inconsistent decimal format: '${value}'`);
+      }
+    }
+    
+    return issues;
+  }
+
+  /**
+   * Check if date format is consistent
+   * @param {string} value - The date value to check
+   */
+  isConsistentDateFormat(value) {
+    // Common date formats
+    const dateFormats = [
+      /^\d{4}-\d{2}-\d{2}$/,           // YYYY-MM-DD
+      /^\d{2}\/\d{2}\/\d{4}$/,         // MM/DD/YYYY
+      /^\d{2}-\d{2}-\d{4}$/,           // MM-DD-YYYY
+      /^\d{4}\/\d{2}\/\d{2}$/,         // YYYY/MM/DD
+      /^\d{2}\.\d{2}\.\d{4}$/,         // MM.DD.YYYY
+      /^\d{1,2}\/\d{1,2}\/\d{4}$/,    // M/D/YYYY
+      /^\d{1,2}-\d{1,2}-\d{4}$/        // M-D-YYYY
+    ];
+    
+    return dateFormats.some(format => format.test(value));
+  }
+
+  /**
+   * Check if decimal format is consistent
+   * @param {string} value - The decimal value to check
+   * @param {string} originalDataType - The original data type string
+   */
+  isConsistentDecimalFormat(value, originalDataType) {
+    const decimalInfo = this.parseDecimalPrecision(originalDataType);
+    if (!decimalInfo) return true; // No precision constraints
+    
+    const parts = value.toString().split('.');
+    if (parts.length === 2) {
+      const decimalPlaces = parts[1].length;
+      return decimalPlaces === decimalInfo.scale;
+    }
+    return true;
+  }
+
+  /**
    * Validate headers match between input file and mapping rules
    * @param {string} inputFilePath - Path to the input file
    * @param {string} delimiter - Delimiter character
@@ -521,6 +679,7 @@ class CSVValidator {
 
         // Proceed with data validation
         const results = [];
+        const allRecords = [];
         let rowNumber = 1; // Start from 1 for user-friendly reporting
 
         fs.createReadStream(inputFilePath)
@@ -528,11 +687,30 @@ class CSVValidator {
           .on('data', (row) => {
             const validationResult = this.validateRecord(row, rowNumber);
             results.push(validationResult);
+            allRecords.push(row);
             rowNumber++;
           })
           .on('end', () => {
             this.validationResults = results;
             console.log(`Validated ${results.length} records using delimiter: '${delimiter}'`);
+            
+            // Perform additional data quality checks
+            console.log('Performing duplicate detection...');
+            const duplicates = this.detectDuplicates(allRecords);
+            if (duplicates.length > 0) {
+              console.log(`Found ${duplicates.length} duplicate records`);
+            } else {
+              console.log('No duplicate records found');
+            }
+            
+            console.log('Performing formatting consistency checks...');
+            const missFormatted = this.detectMissFormattedData(allRecords);
+            if (missFormatted.length > 0) {
+              console.log(`Found ${missFormatted.length} records with formatting issues`);
+            } else {
+              console.log('No formatting issues found');
+            }
+            
             resolve(results);
           })
           .on('error', (error) => {
@@ -643,6 +821,22 @@ class CSVValidator {
       XLSX.utils.book_append_sheet(workbook, errorSheet, '⚠️ Error Analysis');
     }
 
+    // Duplicate records worksheet
+    if (this.duplicateResults && this.duplicateResults.length > 0) {
+      const duplicateData = this.generateDuplicateData();
+      const duplicateSheet = XLSX.utils.json_to_sheet(duplicateData);
+      this.formatWorksheet(duplicateSheet, 'duplicates');
+      XLSX.utils.book_append_sheet(workbook, duplicateSheet, '🔄 Duplicate Records');
+    }
+
+    // Formatting issues worksheet
+    if (this.missFormattedResults && this.missFormattedResults.length > 0) {
+      const formattingData = this.generateFormattingData();
+      const formattingSheet = XLSX.utils.json_to_sheet(formattingData);
+      this.formatWorksheet(formattingSheet, 'formatting');
+      XLSX.utils.book_append_sheet(workbook, formattingSheet, '📝 Formatting Issues');
+    }
+
     // Data Quality Dashboard
     const dashboardData = this.generateDataQualityDashboard();
     const dashboardSheet = XLSX.utils.json_to_sheet(dashboardData);
@@ -680,6 +874,14 @@ class CSVValidator {
       { Section: 'Invalid Records', Value: invalidRecords, Details: 'Records with validation errors', Status: invalidRecords > 0 ? '⚠️' : '✅' },
       { Section: 'Total Validation Errors', Value: totalErrors, Details: 'Sum of all validation errors found', Status: totalErrors > 0 ? '❌' : '✅' },
       { Section: 'Total Warnings', Value: totalWarnings, Details: 'Non-critical validation warnings', Status: totalWarnings > 0 ? '⚠️' : '✅' },
+      { Section: '', Value: '', Details: '', Status: '' },
+      
+      { Section: '🔄 DUPLICATE ANALYSIS', Value: '', Details: '', Status: '' },
+      { Section: 'Duplicate Records', Value: this.duplicateResults ? this.duplicateResults.length : 0, Details: 'Records with identical key field values', Status: this.duplicateResults && this.duplicateResults.length > 0 ? '⚠️' : '✅' },
+      { Section: '', Value: '', Details: '', Status: '' },
+      
+      { Section: '📝 FORMATTING ANALYSIS', Value: '', Details: '', Status: '' },
+      { Section: 'Records with Formatting Issues', Value: this.missFormattedResults ? this.missFormattedResults.length : 0, Details: 'Records with inconsistent formatting', Status: this.missFormattedResults && this.missFormattedResults.length > 0 ? '⚠️' : '✅' },
       { Section: '', Value: '', Details: '', Status: '' },
       
       { Section: '🔍 VALIDATION COVERAGE', Value: '', Details: '', Status: '' },
@@ -1073,6 +1275,25 @@ class CSVValidator {
           { width: 15 }  // Risk
         ];
         break;
+      case 'duplicates':
+        worksheet['!cols'] = [
+          { width: 20 }, // Category
+          { width: 10 }, // Row #
+          { width: 15 }, // Original Row #
+          { width: 30 }, // Key Fields
+          { width: 40 }, // Key Values
+          { width: 15 }  // Status
+        ];
+        break;
+      case 'formatting':
+        worksheet['!cols'] = [
+          { width: 20 }, // Category
+          { width: 10 }, // Row #
+          { width: 12 }, // Issue Count
+          { width: 60 }, // Issues
+          { width: 15 }  // Data Quality
+        ];
+        break;
     }
   }
 
@@ -1157,6 +1378,56 @@ class CSVValidator {
   extractFieldNameFromError(errorMessage) {
     const match = errorMessage.match(/Field '([^']+)'/);
     return match ? match[1] : 'Unknown';
+  }
+
+  /**
+   * Generate duplicate records data for Excel report
+   */
+  generateDuplicateData() {
+    const duplicateData = [
+      { Category: '🔄 DUPLICATE RECORDS ANALYSIS', 'Row #': '', 'Original Row #': '', 'Key Fields': '', 'Key Values': '', 'Status': '' },
+      { Category: `Total Duplicates Found: ${this.duplicateResults.length}`, 'Row #': '', 'Original Row #': '', 'Key Fields': '', 'Key Values': '', 'Status': '' },
+      { Category: '', 'Row #': '', 'Original Row #': '', 'Key Fields': '', 'Key Values': '', 'Status': '' }
+    ];
+    
+    this.duplicateResults.forEach(duplicate => {
+      duplicateData.push({
+        Category: 'Duplicate Record',
+        'Row #': duplicate.rowNumber,
+        'Original Row #': duplicate.originalRowNumber,
+        'Key Fields': duplicate.keyFields.join(', '),
+        'Key Values': duplicate.keyValues.join(' | '),
+        'Status': '🔄 Duplicate'
+      });
+    });
+
+    return duplicateData;
+  }
+
+  /**
+   * Generate formatting issues data for Excel report
+   */
+  generateFormattingData() {
+    const formattingData = [
+      { Category: '📝 FORMATTING ISSUES ANALYSIS', 'Row #': '', 'Issue Count': '', 'Issues': '', 'Data Quality': '' },
+      { Category: `Total Records with Formatting Issues: ${this.missFormattedResults.length}`, 'Row #': '', 'Issue Count': '', 'Issues': '', 'Data Quality': '' },
+      { Category: '', 'Row #': '', 'Issue Count': '', 'Issues': '', 'Data Quality': '' }
+    ];
+    
+    this.missFormattedResults.forEach(issue => {
+      const dataQuality = issue.issueCount <= 2 ? '⚠️ Minor' : issue.issueCount <= 5 ? '🟠 Moderate' : '🔴 Major';
+      const issuesSummary = issue.issues.slice(0, 3).join('; ') + (issue.issues.length > 3 ? '...' : '');
+      
+      formattingData.push({
+        Category: 'Formatting Issue',
+        'Row #': issue.rowNumber,
+        'Issue Count': issue.issueCount,
+        'Issues': issuesSummary,
+        'Data Quality': dataQuality
+      });
+    });
+
+    return formattingData;
   }
 
   /**

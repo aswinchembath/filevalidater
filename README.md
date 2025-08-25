@@ -7,6 +7,9 @@ A comprehensive CSV file validator that checks input files against mapping speci
 - **Flexible Mapping Rules**: Define validation rules in CSV format
 - **Multiple Data Types**: Support for string, integer, decimal, date, email, phone, and custom patterns
 - **Comprehensive Validation**: Length constraints, required fields, allowed values, and regex patterns
+- **Duplicate Detection**: Automatically identify duplicate records based on key fields
+- **Formatting Consistency**: Detect miss-formatted data and formatting inconsistencies
+- **Source vs Destination Validation**: Compare two files to check data consistency
 - **Excel Reporting**: Generate detailed Excel reports with multiple worksheets
 - **Pipe-Delimited Support**: Handle pipe-delimited input files
 - **Detailed Error Reporting**: Row-by-row validation with specific error messages
@@ -25,6 +28,38 @@ npm install
 
 ```bash
 node validate.js <mapping-file> <input-file> [output-file] [delimiter]
+```
+
+### Source vs Destination File Comparison
+
+```bash
+node compareFiles.js <source-file> <destination-file> [options]
+```
+
+**Arguments:**
+- `source-file`: Path to the source file (CSV or pipe-delimited)
+- `destination-file`: Path to the destination file (CSV or pipe-delimited)
+
+**Options:**
+- `--output <file>`: Output file name (default: `comparison_report.xlsx`)
+- `--delimiter <char>`: Delimiter character (auto-detected if not specified)
+- `--key-fields <fields>`: Comma-separated key fields for comparison
+- `--strict`: Enable strict comparison (all fields must match exactly)
+- `--help`: Show help message
+
+**Examples:**
+```bash
+# Basic comparison with auto-detected delimiter
+node compareFiles.js source.csv destination.csv
+
+# Custom output file
+node compareFiles.js source.csv destination.csv --output my_comparison.xlsx
+
+# Specify key fields for comparison
+node compareFiles.js source.csv destination.csv --key-fields "ID,Email,Name"
+
+# Enable strict comparison
+node compareFiles.js source.csv destination.csv --strict
 ```
 
 **Arguments:**
@@ -99,24 +134,83 @@ id|name|email|status|zip_code
 
 ## Output Report
 
-The validator generates an Excel file with three worksheets:
+### Main Validation Report
 
-### 1. Summary
+The main validator generates an Excel file with multiple worksheets:
+
+#### 1. Executive Summary
 - Total records processed
 - Valid/invalid record counts
 - Error and warning totals
 - Success rate percentage
+- Duplicate record count
+- Formatting issues count
 
-### 2. Validation Results
+#### 2. Header Validation
+- Header matching results
+- Missing/extra headers
+- Expected vs actual headers
+
+#### 3. Validation Rules
+- All validation rules applied
+- Field configurations
+- Business rule descriptions
+
+#### 4. Validation Results
 - Row-by-row validation results
 - All input data
 - Error and warning messages
 - Validation status
 
-### 3. Error Details
+#### 5. Error Analysis
 - Detailed error information
 - Field-specific error messages
 - Record data for failed validations
+
+#### 6. Duplicate Records (if found)
+- Duplicate record details
+- Key fields used for detection
+- Row numbers of duplicates
+
+#### 7. Formatting Issues (if found)
+- Formatting inconsistency details
+- Field-level formatting problems
+- Data quality assessment
+
+#### 8. Data Quality Dashboard
+- Overall data quality metrics
+- Error distribution analysis
+- Risk assessment
+
+### Source vs Destination Comparison Report
+
+The comparison validator generates a separate Excel file with:
+
+#### 1. Executive Summary
+- Overall comparison status
+- Record counts for both files
+- Difference analysis summary
+- Priority level and recommendations
+
+#### 2. Detailed Comparison
+- Comparison configuration
+- Key fields used
+- Overall status
+
+#### 3. Missing Records (if any)
+- Records in source but not in destination
+- Key field values
+- Source row numbers
+
+#### 4. Extra Records (if any)
+- Records in destination but not in source
+- Key field values
+- Destination row numbers
+
+#### 5. Data Mismatches (if strict comparison enabled)
+- Records with different field values
+- Field-by-field comparison
+- Source vs destination values
 
 ## Validation Rules
 
@@ -133,6 +227,20 @@ Fields marked as `required: true` must have values. Empty strings, null, or unde
 - **Date**: Must be a parseable date string
 - **Email**: Must match email format (user@domain.com)
 - **Phone**: Must be a valid phone number format
+
+### Duplicate Detection
+The validator automatically detects duplicate records based on:
+- **All Fields**: If no specific key fields are specified, all fields are used
+- **Custom Key Fields**: You can specify specific fields for duplicate detection
+- **Composite Keys**: Multiple fields can be combined to form unique identifiers
+
+### Formatting Consistency Checks
+The validator identifies formatting issues such as:
+- **Leading/Trailing Whitespace**: Inconsistent spacing around values
+- **Case Inconsistencies**: Mixed case in email fields
+- **Phone Number Formats**: Inconsistent phone number formatting
+- **Date Format Variations**: Different date formats in the same field
+- **Decimal Precision**: Inconsistent decimal place formatting
 
 ### Decimal Precision and Scale
 For decimal fields with precision specifications like `DECIMAL(18,2)`:
@@ -194,10 +302,28 @@ validateData();
 
 ## Quick Start
 
+### Main CSV Validation
+
 1. **Install Dependencies**: `npm install`
 2. **Prepare Your Files**: Create a mapping CSV and input file
 3. **Run Validation**: `node validate.js mapping.csv input.csv`
 4. **Review Results**: Check the `artifacts/` folder for the generated Excel report
+
+### Source vs Destination Comparison
+
+1. **Prepare Your Files**: Have source and destination files ready
+2. **Run Comparison**: `node compareFiles.js source.csv destination.csv`
+3. **Review Results**: Check the `artifacts/` folder for the comparison report
+
+### Using NPM Scripts
+
+```bash
+# Main validation
+npm run validate
+
+# File comparison
+npm run compare
+```
 
 ## Output Management
 

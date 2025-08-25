@@ -5,7 +5,9 @@
   "main": "validate.js",
   "scripts": {
     "start": "node validate.js",
-    "validate": "node validate.js mapping.csv input.csv test_report.xlsx"
+    "validate": "node validate.js mapping.csv input.csv test_report.xlsx",
+    "compare": "node compareFiles.js source.csv destination.csv",
+    "test": "node test_new_features.js"
   },
   "dependencies": {
     "csv-parser": "^3.0.0",
